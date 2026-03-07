@@ -1,7 +1,7 @@
 // Smart Börsen Ticker – Service Worker
 // Caching-Strategie: Cache-First für App-Shell, Network-First für API-Daten
 
-const CACHE_NAME  = 'boersen-ticker-v1';
+const CACHE_NAME  = 'boersen-ticker-v2.4';
 const CACHE_URLS  = [
   './',
   './index.html',
