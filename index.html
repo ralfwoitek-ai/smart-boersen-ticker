@@ -331,7 +331,7 @@ html,body{height:100%;background:var(--bg);color:var(--white);font-family:var(--
     <span class="dot"></span>
     <div>
       BÖRSEN TICKER
-      <div style="font-size:7.5px;font-weight:400;color:rgba(0,212,255,0.5);letter-spacing:1px;margin-top:1px;">Ver. V2.4.4</div>
+      <div style="font-size:7.5px;font-weight:400;color:rgba(0,212,255,0.5);letter-spacing:1px;margin-top:1px;">Ver. V2.4.6</div>
     </div>
   </div>
   <div id="clock">--:--:--</div>
@@ -609,13 +609,26 @@ const DAX_SYMBOLS=["ADS.DE","AIR.DE","ALV.DE","BAS.DE","BAYN.DE","BMW.DE","CON.D
 const ETF_SYMBOLS=["EXS1.DE","IWDA.AS","VWRL.AS","EUNL.DE","IS3N.DE","XDWD.DE","EXH1.DE"];
 const SCAN_SYMBOLS=[...DAX_SYMBOLS,...ETF_SYMBOLS];
 const START_HOUR=10,END_HOUR=22;
+// Proxies mit Auto-Fallback
 const PROXIES=[
   'https://api.allorigins.win/raw?url=',
-  'https://corsproxy.io/?',
+  'https://corsproxy.io/?url=',
+  'https://api.codetabs.com/v1/proxy?quest=',
 ];
 let _proxyIdx=0;
-function PROXY(){return PROXIES[_proxyIdx%PROXIES.length];}
-function nextProxy(){_proxyIdx++;console.log('Proxy gewechselt zu:',PROXIES[_proxyIdx%PROXIES.length]);}
+// Proxy-Gesundheit tracken
+const _proxyFails={};
+function getBestProxy(){
+  for(let i=0;i<PROXIES.length;i++){
+    const idx=(_proxyIdx+i)%PROXIES.length;
+    if((_proxyFails[idx]||0)<3)return{url:PROXIES[idx],idx};
+  }
+  // Alle schlecht — Reset und ersten nehmen
+  Object.keys(_proxyFails).forEach(k=>delete _proxyFails[k]);
+  return{url:PROXIES[0],idx:0};
+}
+function markProxyFail(idx){_proxyFails[idx]=(_proxyFails[idx]||0)+1;}
+function markProxyOk(idx){_proxyFails[idx]=0;}
 
 let cfg={symbols:[...DEFAULT_SYMBOLS],priceMin:10,priceMax:500,scanInterval:15,keys:{finnhub:'',twelvedata:'',alphavantage:''},theme:'dark',pushEnabled:false,watchlist:[],portfolio:[]};
 let state={marketData:{},priceHistory:{},scanResults:[],scanData:{},scanStats:{checked:0,strict:0,watch:0,reasons:{}},apiStatus:{},reqCount:{},lastScan:0,scanning:false,running:false,inWindow:false,chartType:'line'};
@@ -623,8 +636,8 @@ let state={marketData:{},priceHistory:{},scanResults:[],scanData:{},scanStats:{c
 // ═══════════════════════════════════════════════════
 // PERSISTENZ
 // ═══════════════════════════════════════════════════
-function loadConfig(){try{const s=localStorage.getItem('boersen_cfg_v244');if(s)Object.assign(cfg,JSON.parse(s));}catch(e){}}
-function persist(){localStorage.setItem('boersen_cfg_v244',JSON.stringify(cfg));}
+function loadConfig(){try{const s=localStorage.getItem('boersen_cfg_v246');if(s)Object.assign(cfg,JSON.parse(s));}catch(e){}}
+function persist(){localStorage.setItem('boersen_cfg_v246',JSON.stringify(cfg));}
 
 // ═══════════════════════════════════════════════════
 // ⬇ EXPORT — Einstellungen als JSON-Datei speichern
@@ -857,7 +870,10 @@ async function fetchNews(){
   ];
   try{
     const url=`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent('https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGDAXI&region=DE&lang=de-DE')}&count=10`;
-    const r=await fetch(PROXY()+encodeURIComponent(url),{signal:AbortSignal.timeout(4000)});
+    const {url:pUrl}=getBestProxy();
+    const nc=new AbortController();const nt=setTimeout(()=>nc.abort(),3500);
+    const r=await fetch(pUrl+encodeURIComponent(url),{signal:nc.signal});
+    clearTimeout(nt);
     const j=await r.json();
     if(j.items&&j.items.length>0){
       newsItems=j.items.map(item=>({title:item.title,up:Math.random()>0.4,link:item.link}));
@@ -899,36 +915,103 @@ async function yahooChart(sym,interval='1m',range='1d'){
   const useInterval=isWeekend()?'30m':interval;
   const useRange=isWeekend()?'5d':range;
   const url=`https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=${useInterval}&range=${useRange}&includePrePost=false`;
-  // Beiden Proxies versuchen
-  for(let attempt=0;attempt<2;attempt++){
+  // Alle Proxies versuchen, jeder mit kurzem Timeout
+  for(let attempt=0;attempt<PROXIES.length;attempt++){
+    const {url:proxyUrl,idx}=getBestProxy();
     try{
-      const proxyUrl=PROXIES[(_proxyIdx+attempt)%PROXIES.length];
-      const r=await fetch(proxyUrl+encodeURIComponent(url),{signal:AbortSignal.timeout(4000)});
+      const controller=new AbortController();
+      const tid=setTimeout(()=>controller.abort(),3500);
+      const r=await fetch(proxyUrl+encodeURIComponent(url),{signal:controller.signal});
+      clearTimeout(tid);
+      if(!r.ok){markProxyFail(idx);continue;}
       const j=await r.json();
       const res=j?.chart?.result;
-      if(res&&res[0]){_proxyIdx=(_proxyIdx+attempt)%PROXIES.length;return res[0];}
-    }catch(e){}
+      if(res&&res[0]){markProxyOk(idx);_proxyIdx=idx;return res[0];}
+      markProxyFail(idx);
+    }catch(e){
+      markProxyFail(idx);
+      _proxyIdx=(idx+1)%PROXIES.length;
+    }
   }
   return null;
 }
-async function fetchQuote(sym){
-  const chart=await yahooChart(sym,'1m','1d');
-  if(chart){const meta=chart.meta||{};const price=parseFloat(meta.regularMarketPrice||0);const prev=parseFloat(meta.previousClose||price);
-    if(price){const change=price-prev,pct=prev?(change/prev*100):0;const closes=chart?.indicators?.quote?.[0]?.close||[];const ts_arr=chart?.timestamp||[];const hist=[];const n=Math.min(closes.length,ts_arr.length);for(let i=0;i<n;i++)if(closes[i]!=null&&ts_arr[i]!=null)hist.push([ts_arr[i],closes[i]]);logReq('yahoo',true);
-    // OHLC für Candlestick
-    const opens=chart?.indicators?.quote?.[0]?.open||[];const highs=chart?.indicators?.quote?.[0]?.high||[];const lows=chart?.indicators?.quote?.[0]?.low||[];
-    const vols=chart?.indicators?.quote?.[0]?.volume||[];
-    const ohlc=[];for(let i=0;i<Math.min(opens.length,closes.length,ts_arr.length);i++)if(opens[i]!=null&&closes[i]!=null)ohlc.push([ts_arr[i],opens[i],highs[i]||closes[i],lows[i]||closes[i],closes[i],vols[i]||0]);
-    // Volumen-Array für Analyse
+// Einzelne API-Fetcher — geben null zurück bei Fehler
+async function fetchYahoo(sym){
+  try{
+    const chart=await yahooChart(sym,'1m','1d');
+    if(!chart)return null;
+    const meta=chart.meta||{};
+    const price=parseFloat(meta.regularMarketPrice||0);
+    const prev=parseFloat(meta.previousClose||price);
+    if(!price)return null;
+    const change=price-prev,pct=prev?(change/prev*100):0;
+    const q=chart?.indicators?.quote?.[0]||{};
+    const closes=q.close||[],opens=q.open||[],highs=q.high||[],lows=q.low||[],vols=q.volume||[];
+    const ts_arr=chart?.timestamp||[];
+    const hist=[];
+    for(let i=0;i<Math.min(closes.length,ts_arr.length);i++)
+      if(closes[i]!=null&&ts_arr[i]!=null)hist.push([ts_arr[i],closes[i]]);
+    const ohlc=[];
+    for(let i=0;i<Math.min(opens.length,closes.length,ts_arr.length);i++)
+      if(opens[i]!=null&&closes[i]!=null)
+        ohlc.push([ts_arr[i],opens[i],highs[i]||closes[i],lows[i]||closes[i],closes[i],vols[i]||0]);
     const volArr=vols.filter(v=>v!=null&&v>0);
     const avgVol=volArr.length?volArr.reduce((a,b)=>a+b,0)/volArr.length:0;
-    const lastVol=volArr.length?volArr[volArr.length-1]:0;
-    return{price,change,pct,src:'Yahoo',hist:hist.slice(-60),ohlc:ohlc.slice(-40),volArr:volArr.slice(-60),avgVol,lastVol,ts:Date.now()/1000};}
+    logReq('yahoo',true);
+    return{price,change,pct,src:'Yahoo',hist:hist.slice(-60),ohlc:ohlc.slice(-40),volArr:volArr.slice(-60),avgVol,ts:Date.now()/1000};
+  }catch(e){logReq('yahoo',false);return null;}
+}
+
+async function fetchFinnhub(sym){
+  if(!cfg.keys.finnhub)return null;
+  try{
+    const c=new AbortController();const t=setTimeout(()=>c.abort(),4000);
+    const r=await fetch(`https://finnhub.io/api/v1/quote?symbol=${sym}&token=${cfg.keys.finnhub}`,{signal:c.signal});
+    clearTimeout(t);
+    const j=await r.json();
+    if(j&&j.c&&j.c>0){logReq('finnhub',true);return{price:j.c,change:j.d||0,pct:j.dp||0,src:'Finnhub',hist:[],ohlc:[],volArr:[],avgVol:0,ts:Date.now()/1000};}
+    return null;
+  }catch(e){logReq('finnhub',false);return null;}
+}
+
+async function fetchTwelveData(sym){
+  if(!cfg.keys.twelvedata)return null;
+  try{
+    const c=new AbortController();const t=setTimeout(()=>c.abort(),4000);
+    const r=await fetch(`https://api.twelvedata.com/quote?symbol=${sym}&apikey=${cfg.keys.twelvedata}`,{signal:c.signal});
+    clearTimeout(t);
+    const j=await r.json();
+    if(j&&j.close&&!j.code){logReq('twelvedata',true);return{price:parseFloat(j.close),change:parseFloat(j.change||0),pct:parseFloat(j.percent_change||0),src:'TwelveData',hist:[],ohlc:[],volArr:[],avgVol:0,ts:Date.now()/1000};}
+    return null;
+  }catch(e){logReq('twelvedata',false);return null;}
+}
+
+// HAUPT-FETCH: alle APIs parallel — schnellstes valides Ergebnis gewinnt
+async function fetchQuote(sym){
+  // Promise.any: erste erfolgreiche Antwort gewinnt
+  const promises=[];
+  promises.push(fetchYahoo(sym));
+  if(cfg.keys.finnhub)promises.push(fetchFinnhub(sym));
+  if(cfg.keys.twelvedata)promises.push(fetchTwelveData(sym));
+
+  if(promises.length===1){
+    // Nur Yahoo — direkt warten
+    return await promises[0];
   }
-  logReq('yahoo',false);
-  if(cfg.keys.finnhub){try{const r=await fetch(`https://finnhub.io/api/v1/quote?symbol=${sym}&token=${cfg.keys.finnhub}`,{signal:AbortSignal.timeout(6000)});const j=await r.json();if(j&&j.c){logReq('finnhub',true);return{price:j.c,change:j.d,pct:j.dp,src:'Finnhub',hist:[],ohlc:[],ts:Date.now()/1000};}}catch(e){}}
-  if(cfg.keys.twelvedata){try{const r=await fetch(`https://api.twelvedata.com/quote?symbol=${sym}&apikey=${cfg.keys.twelvedata}`,{signal:AbortSignal.timeout(6000)});const j=await r.json();if(j&&j.close){logReq('twelvedata',true);return{price:parseFloat(j.close),change:parseFloat(j.change),pct:parseFloat(j.percent_change),src:'TwelveData',hist:[],ohlc:[],ts:Date.now()/1000};}}catch(e){}}
-  return null;
+
+  try{
+    // Promise.any: nimmt das erste nicht-null Ergebnis
+    const result=await Promise.any(
+      promises.map(p=>p.then(r=>{
+        if(r===null)throw new Error('null');
+        return r;
+      }))
+    );
+    return result;
+  }catch(e){
+    // Alle sind null/fehlgeschlagen
+    return null;
+  }
 }
 function logReq(api,ok){if(!state.reqCount[api])state.reqCount[api]=0;state.reqCount[api]++;state.apiStatus[api]=ok?'ok':'error';}
 
@@ -1587,23 +1670,25 @@ async function scannerLoop(){
 
 // INIT
 function init(){
-  loadConfig();state.running=true;
-  applyTheme();applyPushState();
-  renderMarketLists();
-  updateClock();setInterval(updateClock,1000);setInterval(updateScanTimer,1000);
-  document.getElementById('pf-date').value=new Date().toISOString().slice(0,10);
-  // Status sofort sichtbar setzen
-  const dot=document.getElementById('status-dot');
-  const txt=document.getElementById('status-text');
-  if(dot)dot.className='status-dot live';
-  if(txt)txt.textContent='Verbinde mit Yahoo Finance…';
-  // Ersten Fetch sofort starten (nicht auf mainLoop warten)
-  setTimeout(()=>{
-    runDataFetch().then(()=>{updateStatusBar();renderApiStatus();});
-  },500);
-  mainLoop();scannerLoop();
-  fetchNews();setInterval(fetchNews,10*60*1000);
-  if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+  try{
+    loadConfig();state.running=true;
+    applyTheme();applyPushState();
+    renderMarketLists();
+    updateClock();setInterval(updateClock,1000);setInterval(updateScanTimer,1000);
+    document.getElementById('pf-date').value=new Date().toISOString().slice(0,10);
+    const dot=document.getElementById('status-dot');
+    const txt=document.getElementById('status-text');
+    if(dot)dot.className='status-dot live';
+    if(txt)txt.textContent='Verbinde…';
+    mainLoop();
+    scannerLoop();
+    fetchNews();setInterval(fetchNews,10*60*1000);
+    if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+  }catch(err){
+    console.error('Init Fehler:',err);
+    const txt=document.getElementById('status-text');
+    if(txt)txt.textContent='Start-Fehler: '+err.message;
+  }
 }
 init();
 </script>
