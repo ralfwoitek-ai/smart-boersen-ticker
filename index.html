@@ -697,8 +697,7 @@ function importSettings(input){
       // UI aktualisieren
       applyTheme();renderMarketLists();renderWatchlist();renderPortfolio();
       // Settings-Felder neu befüllen
-      const si=document.getElementById('symbols-input');if(si)si.value=cfg.symbols.join('
-');
+      const si=document.getElementById('symbols-input');if(si)si.value=cfg.symbols.join('\n');
       const pm=document.getElementById('price-min');if(pm)pm.value=cfg.priceMin;
       const px=document.getElementById('price-max');if(px)px.value=cfg.priceMax;
       const sc=document.getElementById('scan-interval');if(sc)sc.value=cfg.scanInterval;
