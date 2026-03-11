@@ -331,7 +331,7 @@ html,body{height:100%;background:var(--bg);color:var(--white);font-family:var(--
     <span class="dot"></span>
     <div>
       BÖRSEN TICKER
-      <div style="font-size:7.5px;font-weight:400;color:rgba(0,212,255,0.5);letter-spacing:1px;margin-top:1px;">Ver. V2.4.8</div>
+      <div style="font-size:7.5px;font-weight:400;color:rgba(0,212,255,0.5);letter-spacing:1px;margin-top:1px;">Ver. V2.5.0</div>
     </div>
   </div>
   <div id="clock">--:--:--</div>
@@ -556,6 +556,7 @@ html,body{height:100%;background:var(--bg);color:var(--white);font-family:var(--
 // ═══════════════════════════════════════════════════
 // CONFIG & STATE
 // ═══════════════════════════════════════════════════
+const DEFAULT_SCAN_SDAX=["AFX.DE", "AIXA.DE", "BC8.DE", "DWS.DE", "ECV.DE", "EVK.DE", "FME.DE", "FPE3.DE", "FNTN.DE", "G24.DE", "GBF.DE", "HAB.DE", "HAG.DE", "HOT.DE", "JEN.DE", "KRN.DE", "MBB.DE", "NDA.DE", "NEM.DE", "OHB.DE", "PAH3.DE", "PSI.DE", "PUM.DE", "SAF.DE", "SDF.DE", "SFQ.DE", "SGL.DE", "SMHN.DE", "TEG.DE", "TGH.DE", "TNIH.DE", "VBK.DE", "VOS.DE", "WAF.DE", "WCH.DE"];
 const DEFAULT_SYMBOLS=["NVDA","SIE.DE","PAH3.DE","META","AAPL","AMZN","XDWD.DE","MRK","MSFT","TSLA"];
 const TICKER_NAMES={
   // ── US-Aktien ──────────────────────────────────────────────
@@ -608,7 +609,79 @@ const DEFAULT_CRYPTO=["BTC-USD","ETH-USD"];
 const DEFAULT_FOREX=["EURUSD=X","GBPUSD=X"];
 const DAX_SYMBOLS=["ADS.DE","AIR.DE","ALV.DE","BAS.DE","BAYN.DE","BMW.DE","CON.DE","DB1.DE","DBK.DE","DHL.DE","DTE.DE","EOAN.DE","FRE.DE","HEI.DE","HEN3.DE","IFX.DE","MBG.DE","MRK.DE","MTX.DE","MUV2.DE","PAH3.DE","RHM.DE","RWE.DE","SAP.DE","SIE.DE","VNA.DE","VOW3.DE","ZAL.DE"];
 const ETF_SYMBOLS=["EXS1.DE","IWDA.AS","VWRL.AS","EUNL.DE","IS3N.DE","XDWD.DE","EXH1.DE"];
-const SCAN_SYMBOLS=[...DAX_SYMBOLS,...ETF_SYMBOLS];
+const SCAN_SYMBOLS=[
+  // ── DAX 40 ──
+  "ALV.DE",
+  "BAS.DE",
+  "BAYN.DE",
+  "BMW.DE",
+  "CON.DE",
+  "DAI.DE",
+  "DB1.DE",
+  "DBK.DE",
+  "DHL.DE",
+  "DTE.DE",
+  "EOAN.DE",
+  "FRE.DE",
+  "HEI.DE",
+  "HEN3.DE",
+  "IFX.DE",
+  "LIN.DE",
+  "MRK.DE",
+  "MTX.DE",
+  "MUV2.DE",
+  "PAH3.DE",
+  "PICK.DE",
+  "RHM.DE",
+  "RWE.DE",
+  "SAP.DE",
+  "SIE.DE",
+  "SY1.DE",
+  "VOW3.DE",
+  "VNA.DE",
+  "ZAL.DE",
+  "BNR.DE",
+  "DTG.DE",
+  "ENR.DE",
+  "BOSS.DE",
+  "1COV.DE",
+  "QIA.DE",
+  // ── SDAX / Small Caps ──
+  "AFX.DE",
+  "AIXA.DE",
+  "BC8.DE",
+  "DWS.DE",
+  "ECV.DE",
+  "EVK.DE",
+  "FME.DE",
+  "FPE3.DE",
+  "FNTN.DE",
+  "G24.DE",
+  "GBF.DE",
+  "HAB.DE",
+  "HAG.DE",
+  "HOT.DE",
+  "JEN.DE",
+  "KRN.DE",
+  "MBB.DE",
+  "NDA.DE",
+  "NEM.DE",
+  "OHB.DE",
+  "PSI.DE",
+  "PUM.DE",
+  "SAF.DE",
+  "SDF.DE",
+  "SFQ.DE",
+  "SGL.DE",
+  "SMHN.DE",
+  "TEG.DE",
+  "TGH.DE",
+  "TNIH.DE",
+  "VBK.DE",
+  "VOS.DE",
+  "WAF.DE",
+  "WCH.DE"
+];
 const START_HOUR=10,END_HOUR=22;
 // Proxies mit Auto-Fallback
 const PROXIES=[
@@ -637,8 +710,8 @@ let state={marketData:{},priceHistory:{},scanResults:[],scanData:{},scanStats:{c
 // ═══════════════════════════════════════════════════
 // PERSISTENZ
 // ═══════════════════════════════════════════════════
-function loadConfig(){try{const s=localStorage.getItem('boersen_cfg_v248');if(s)Object.assign(cfg,JSON.parse(s));}catch(e){}}
-function persist(){localStorage.setItem('boersen_cfg_v248',JSON.stringify(cfg));}
+function loadConfig(){try{const s=localStorage.getItem('boersen_cfg_v250');if(s)Object.assign(cfg,JSON.parse(s));}catch(e){}}
+function persist(){localStorage.setItem('boersen_cfg_v250',JSON.stringify(cfg));}
 
 // ═══════════════════════════════════════════════════
 // ⬇ EXPORT — Einstellungen als JSON-Datei speichern
@@ -1571,6 +1644,10 @@ function buildSparkSVG(hist,up){
 }
 
 function renderScanner(){
+  // SDAX-Zähler in Stats
+  const sdaxCount=Object.keys(state.scanData).filter(s=>DEFAULT_SCAN_SDAX.includes(s)).length;
+  const sdaxEl=document.getElementById('scan-sdax-count');
+  if(sdaxEl)sdaxEl.textContent=sdaxCount+' SDAX';
   const st=state.scanStats;
   document.getElementById('scan-checked').textContent=st.checked||0;
   document.getElementById('scan-strict').textContent=st.strict||0;
