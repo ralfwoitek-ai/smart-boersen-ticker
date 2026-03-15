@@ -1,90 +1,93 @@
-// Smart Börsen Ticker – Service Worker
-// Caching-Strategie: Cache-First für App-Shell, Network-First für API-Daten
+// ═══════════════════════════════════════════════
+// SERVICE WORKER — Smart Börsen Ticker
+// Version wird bei jedem Update erhöht →
+// Browser erkennt Änderung, löscht alten Cache,
+// lädt neue Version automatisch
+// ═══════════════════════════════════════════════
+const VERSION = 'v2.5.1';
+const CACHE_NAME = `boersen-ticker-${VERSION}`;
 
-const CACHE_NAME  = 'boersen-ticker-v2.4';
-const CACHE_URLS  = [
+// Dateien die gecached werden sollen
+const CACHE_FILES = [
   './',
   './index.html',
   './manifest.json',
-  'https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=Space+Mono:wght@400;700&display=swap',
+  './icon-192.png',
+  './icon-512.png',
 ];
 
-// ── Install: App-Shell cachen ──────────────────────
+// ── INSTALL: neuen Cache befüllen ──────────────
 self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(CACHE_URLS))
-      .then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then(cache => {
+      // Einzeln cachen — wenn icon fehlt, kein Absturz
+      return Promise.allSettled(
+        CACHE_FILES.map(file =>
+          cache.add(file).catch(() => {/* Datei fehlt — ignorieren */})
+        )
+      );
+    })
   );
+  // Sofort übernehmen ohne auf Tab-Close zu warten
+  self.skipWaiting();
 });
 
-// ── Activate: Alte Caches löschen ─────────────────
+// ── ACTIVATE: alte Caches löschen ─────────────
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys().then(keys =>
       Promise.all(
         keys
-          .filter(k => k !== CACHE_NAME)
-          .map(k => caches.delete(k))
+          .filter(key => key.startsWith('boersen-ticker-') && key !== CACHE_NAME)
+          .map(key => {
+            console.log('[SW] Alter Cache gelöscht:', key);
+            return caches.delete(key);
+          })
       )
     ).then(() => self.clients.claim())
   );
 });
 
-// ── Fetch: Strategie je nach Request-Typ ──────────
+// ── FETCH: Cache-first, Netz als Fallback ──────
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // API-Requests: immer vom Netz (kein Cache)
+  // API-Requests niemals cachen (Yahoo, Finnhub etc.)
   if (
     url.hostname.includes('yahoo') ||
     url.hostname.includes('finnhub') ||
     url.hostname.includes('twelvedata') ||
     url.hostname.includes('alphavantage') ||
-    url.hostname.includes('allorigins')
+    url.hostname.includes('allorigins') ||
+    url.hostname.includes('corsproxy') ||
+    url.hostname.includes('codetabs') ||
+    url.hostname.includes('fonts.googleapis') ||
+    url.hostname.includes('rss2json')
   ) {
-    event.respondWith(
-      fetch(event.request).catch(() =>
-        new Response(JSON.stringify({ error: 'offline' }), {
-          headers: { 'Content-Type': 'application/json' }
-        })
-      )
-    );
+    event.respondWith(fetch(event.request).catch(() => new Response('', {status: 503})));
     return;
   }
 
-  // Google Fonts: Cache-First
-  if (url.hostname.includes('fonts.googleapis') || url.hostname.includes('fonts.gstatic')) {
-    event.respondWith(
-      caches.match(event.request).then(cached =>
-        cached || fetch(event.request).then(response => {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then(c => c.put(event.request, clone));
-          return response;
-        })
-      )
-    );
-    return;
-  }
-
-  // App-Shell: Cache-First, Fallback auf index.html
+  // App-Dateien: Cache-first
   event.respondWith(
     caches.match(event.request).then(cached => {
       if (cached) return cached;
       return fetch(event.request).then(response => {
-        if (response.ok) {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then(c => c.put(event.request, clone));
+        // Nur gültige Antworten cachen
+        if (!response || response.status !== 200 || response.type === 'opaque') {
+          return response;
         }
+        const toCache = response.clone();
+        caches.open(CACHE_NAME).then(cache => cache.put(event.request, toCache));
         return response;
-      }).catch(() => caches.match('./index.html'));
+      }).catch(() => cached || new Response('Offline', {status: 503}));
     })
   );
 });
 
-// ── Background Sync (optional) ────────────────────
-self.addEventListener('sync', event => {
-  if (event.tag === 'sync-market-data') {
-    // Zukünftig: Background-Fetch für Push-Notifications
+// ── SKIP_WAITING Nachricht empfangen ──────────
+self.addEventListener('message', event => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
   }
 });
